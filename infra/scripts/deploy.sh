@@ -47,11 +47,19 @@ aws ecr get-login-password --region "$REGION" \
 log "pulling $IMAGE"
 compose pull --quiet
 
-# Bring data services up first so migrate has something to talk to.
+# --wait blocks until the db healthcheck passes. Without it, compose reports
+# success as soon as the container starts, and MariaDB's first-boot
+# initialisation takes 20-60s -- long enough for `bench new-site` to fail with
+# "Can't connect to server on 'db'".
+#
+# --no-deps is deliberately NOT used here: it would skip the very
+# depends_on/service_healthy conditions that order this correctly.
 log "starting data plane"
-compose up -d --remove-orphans db redis-cache redis-queue
-compose up -d --no-deps configurator
-compose up -d --no-deps backend
+compose up -d --remove-orphans --wait --wait-timeout 300 db redis-cache redis-queue
+
+# Pulls in configurator via depends_on: service_completed_successfully.
+log "starting backend"
+compose up -d backend
 
 # Workers must not process jobs against a half-migrated schema.
 log "pausing workers for migration"
@@ -67,12 +75,43 @@ wait_for_backend() {
 }
 wait_for_backend
 
-if compose exec -T backend bash -c "test -f sites/$SITE_NAME/site_config.json"; then
+# A site is only really present if its database exists too. `bench new-site`
+# writes site_config.json before creating the schema, so a run that dies in
+# between leaves a directory that looks like a site but has nothing behind it
+# -- and keying purely off the config file would send every later deploy down
+# the migrate path, failing forever.
+site_config_exists() {
+  compose exec -T backend bash -c "test -f sites/$SITE_NAME/site_config.json"
+}
+
+site_database_exists() {
+  local db
+  db=$(compose exec -T backend bash -c \
+    "python -c \"import json;print(json.load(open('sites/$SITE_NAME/site_config.json'))['db_name'])\"" \
+    2>/dev/null | tr -d '\r\n')
+  [[ -n "$db" ]] || return 1
+  compose exec -T db sh -c \
+    "mariadb -uroot -p\"\$MARIADB_ROOT_PASSWORD\" -N -B -e \"SHOW DATABASES LIKE '$db'\"" \
+    2>/dev/null | grep -qx "$db"
+}
+
+if site_config_exists && site_database_exists; then
   log "site $SITE_NAME exists -- migrating"
   compose exec -T backend bench --site "$SITE_NAME" migrate
 else
-  log "site $SITE_NAME not found -- creating (first deploy)"
-  compose exec -T backend bench new-site "$SITE_NAME" \
+  if site_config_exists; then
+    # Safe to recreate: the database is absent, so there is nothing to lose.
+    # Guarded on that check specifically -- never force when a database is
+    # merely unreachable.
+    log "site $SITE_NAME has config but no database -- previous creation did not finish; recreating"
+    FORCE=--force
+  else
+    log "site $SITE_NAME not found -- creating (first deploy)"
+    FORCE=""
+  fi
+
+  # shellcheck disable=SC2086
+  compose exec -T backend bench new-site "$SITE_NAME" $FORCE \
     --no-mariadb-socket \
     --db-root-password "$DB_ROOT_PASSWORD" \
     --admin-password "$ADMIN_PASSWORD" \
