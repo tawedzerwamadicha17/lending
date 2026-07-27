@@ -1,0 +1,46 @@
+name: Terraform
+
+# Validation only. `terraform apply` is deliberately NOT wired to CI: applying
+# this stack requires permission to create IAM roles, and a CI role that can
+# mint IAM roles can escalate itself to account admin. Infra changes are
+# applied by an operator -- see docs/deployment.md.
+
+on:
+  pull_request:
+    paths:
+      - "infra/terraform/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "infra/terraform/**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        stack: [bootstrap, env]
+    defaults:
+      run:
+        working-directory: infra/terraform/${{ matrix.stack }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+
+      - name: Format
+        run: terraform fmt -check -recursive
+
+      - name: Init
+        # No backend access needed to type-check the configuration.
+        run: terraform init -backend=false
+
+      - name: Validate
+        run: terraform validate

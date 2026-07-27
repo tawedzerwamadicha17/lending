@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# cloud-init: prepare the host to run the stack. Deliberately does NOT deploy
+# the application -- the first CD run does that, so there is exactly one code
+# path that puts an image on the box.
+set -euxo pipefail
+
+APP_DIR=/opt/lending
+
+# --- swap ------------------------------------------------------------------
+# A 2 GiB box running MariaDB + gunicorn + three workers has very little
+# headroom. Swap turns an OOM kill into a slowdown.
+if [ ! -f /swapfile ]; then
+  dd if=/dev/zero of=/swapfile bs=1M count=${swap_size_mb}
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  # Frappe is latency-sensitive; only swap under real pressure.
+  sysctl -w vm.swappiness=10
+  echo 'vm.swappiness=10' > /etc/sysctl.d/99-swappiness.conf
+fi
+
+# --- docker ----------------------------------------------------------------
+dnf update -y
+dnf install -y docker
+
+# The compose plugin is not in the AL2023 repos.
+COMPOSE_VERSION=v2.32.4
+mkdir -p /usr/libexec/docker/cli-plugins
+curl -fsSL \
+  "https://github.com/docker/compose/releases/download/$${COMPOSE_VERSION}/docker-compose-linux-aarch64" \
+  -o /usr/libexec/docker/cli-plugins/docker-compose
+chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+
+# Cap log growth -- an unbounded json-file driver fills a 30 GB root volume.
+cat > /etc/docker/daemon.json <<'JSON'
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "3" }
+}
+JSON
+
+systemctl enable --now docker
+
+# --- stack config ----------------------------------------------------------
+mkdir -p "$APP_DIR"
+
+cat > "$APP_DIR/stack.env" <<ENV
+ENVIRONMENT=${environment}
+REGION=${region}
+SSM_PREFIX=${ssm_prefix}
+SITE_NAME=${site_name}
+ENABLE_TLS=${enable_tls}
+ACME_EMAIL=${acme_email}
+BACKUP_BUCKET=${config_bucket}
+ECR_REGISTRY=${ecr_registry}
+ECR_REPOSITORY=${ecr_repository}
+ENV
+chmod 600 "$APP_DIR/stack.env"
+
+# Compose files and scripts live in S3 so a rebuilt box picks up the current
+# versions without a Terraform round-trip.
+aws s3 sync --region ${region} "s3://${config_bucket}/config/" "$APP_DIR/"
+chmod +x "$APP_DIR"/*.sh
+
+# --- nightly backup --------------------------------------------------------
+cat > /etc/systemd/system/lending-backup.service <<'UNIT'
+[Unit]
+Description=Frappe Lending backup to S3
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/lending/backup.sh
+UNIT
+
+cat > /etc/systemd/system/lending-backup.timer <<TIMER
+[Unit]
+Description=Nightly Frappe Lending backup
+
+[Timer]
+OnCalendar=*-*-* ${backup_hour}:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+TIMER
+
+systemctl daemon-reload
+systemctl enable --now lending-backup.timer
+
+echo "host ready -- awaiting first deploy"

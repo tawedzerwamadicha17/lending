@@ -1,0 +1,120 @@
+name: SSM Deploy
+description: Publish stack config to S3 and roll the target instance onto a new image via SSM Send-Command.
+
+inputs:
+  environment:
+    description: prod or staging
+    required: true
+  image:
+    description: Full ECR image URI to deploy
+    required: true
+  project:
+    description: Project tag / name prefix
+    required: true
+    default: lending
+  region:
+    description: AWS region
+    required: true
+    default: us-east-1
+  timeout_seconds:
+    description: How long the on-host deploy may run before SSM gives up
+    required: false
+    default: "1800"
+
+outputs:
+  url:
+    description: Resolved application URL
+    value: ${{ steps.run.outputs.url }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        IMAGE: ${{ inputs.image }}
+        PROJECT: ${{ inputs.project }}
+        AWS_REGION: ${{ inputs.region }}
+        TIMEOUT: ${{ inputs.timeout_seconds }}
+      run: |
+        set -euo pipefail
+
+        ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+        BUCKET="${PROJECT}-${ENVIRONMENT}-${ACCOUNT_ID}"
+
+        INSTANCE_ID="$(aws ec2 describe-instances \
+          --filters \
+            "Name=tag:Project,Values=${PROJECT}" \
+            "Name=tag:Environment,Values=${ENVIRONMENT}" \
+            "Name=instance-state-name,Values=running" \
+          --query 'Reservations[].Instances[].InstanceId | [0]' --output text)"
+
+        if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "None" ]]; then
+          echo "::error::No running instance tagged Project=${PROJECT} Environment=${ENVIRONMENT}. Has Terraform been applied for this environment?"
+          exit 1
+        fi
+        echo "Target: $INSTANCE_ID ($ENVIRONMENT)"
+
+        # Ship the compose files and scripts that belong to this commit, so a
+        # change to the stack definition deploys with the code that needs it.
+        aws s3 cp docker/compose.yaml          "s3://${BUCKET}/config/compose.yaml"
+        aws s3 cp docker/compose.traefik.yaml  "s3://${BUCKET}/config/compose.traefik.yaml"
+        aws s3 cp infra/scripts/deploy.sh      "s3://${BUCKET}/config/deploy.sh"
+        aws s3 cp infra/scripts/backup.sh      "s3://${BUCKET}/config/backup.sh"
+        aws s3 cp infra/scripts/restore.sh     "s3://${BUCKET}/config/restore.sh"
+
+        # Built as a JSON file rather than the CLI's shorthand syntax --
+        # shorthand cannot carry these values safely once they contain
+        # slashes and quoting.
+        jq -n --arg bucket "$BUCKET" --arg image "$IMAGE" '{
+          commands: [
+            "set -euo pipefail",
+            "aws s3 sync s3://\($bucket)/config/ /opt/lending/",
+            "chmod +x /opt/lending/*.sh",
+            "/opt/lending/deploy.sh \($image)"
+          ]
+        }' > /tmp/ssm-params.json
+
+        COMMAND_ID="$(aws ssm send-command \
+          --instance-ids "$INSTANCE_ID" \
+          --document-name AWS-RunShellScript \
+          --comment "deploy ${GITHUB_SHA:0:7} to ${ENVIRONMENT}" \
+          --timeout-seconds "$TIMEOUT" \
+          --parameters file:///tmp/ssm-params.json \
+          --query Command.CommandId --output text)"
+
+        echo "SSM command: $COMMAND_ID"
+
+        # send-command is async; poll to completion so the job's status
+        # actually reflects whether the deploy worked.
+        DEADLINE=$(( SECONDS + TIMEOUT ))
+        STATUS=Pending
+        while [[ $SECONDS -lt $DEADLINE ]]; do
+          sleep 10
+          STATUS="$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" \
+            --query Status --output text 2>/dev/null || echo Pending)"
+          echo "  status: $STATUS"
+          [[ "$STATUS" =~ ^(Success|Failed|Cancelled|TimedOut)$ ]] && break
+        done
+
+        echo "::group::Deploy output"
+        aws ssm get-command-invocation \
+          --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" \
+          --query StandardOutputContent --output text || true
+        echo "::endgroup::"
+
+        if [[ "$STATUS" != "Success" ]]; then
+          echo "::group::Deploy errors"
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" \
+            --query StandardErrorContent --output text || true
+          echo "::endgroup::"
+          echo "::error::Deploy to ${ENVIRONMENT} finished with status ${STATUS}"
+          exit 1
+        fi
+
+        IP="$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+          --query 'Reservations[].Instances[].PublicIpAddress | [0]' --output text)"
+        echo "url=http://${IP}" >> "$GITHUB_OUTPUT"
