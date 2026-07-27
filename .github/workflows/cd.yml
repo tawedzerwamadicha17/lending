@@ -42,8 +42,15 @@ env:
   # the Containerfile will silently change your image otherwise.
   FRAPPE_DOCKER_REF: main
   FRAPPE_BRANCH: develop
+  # Base image tag: python:<PYTHON_VERSION>-slim-bookworm, so a minor series
+  # is fine here.
   PYTHON_VERSION: "3.14"
-  NODE_VERSION: "24"
+  # Must be a FULL semver. The Containerfile puts
+  # $NVM_DIR/versions/node/v${NODE_VERSION}/bin on PATH, and nvm creates that
+  # directory under the resolved version -- so "24" installs v24.18.0 and then
+  # every node tool is off PATH, surfacing as `FileNotFoundError: 'yarn'`
+  # during bench init.
+  NODE_VERSION: "24.18.0"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -122,18 +129,15 @@ jobs:
       - name: Fetch frappe_docker build context
         run: git clone --depth 1 --branch "$FRAPPE_DOCKER_REF" https://github.com/frappe/frappe_docker frappe_docker
 
-      - name: Compose apps.json
+      - name: Encode apps.json
         id: apps
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Rewrite this repo's URL with a job-scoped token so the build can
-          # clone it even when the repo is private. The token expires with the
-          # job, so its presence in build metadata is inert.
-          jq --arg url "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}" \
-             'map(if (.url | test("/${{ github.event.repository.name }}$")) then .url = $url else . end)' \
-             docker/apps.json > apps.resolved.json
-          echo "b64=$(base64 -w0 apps.resolved.json)" >> "$GITHUB_OUTPUT"
+          # This repository is public, so the build clones it anonymously and
+          # no credential is involved. If it is ever made private, rewrite the
+          # URL here as https://x-access-token:${{ '${TOKEN}' }}@github.com/<repo>
+          # -- but note that build args are recorded in image metadata and
+          # echoed in build logs, so use a job-scoped token, never a PAT.
+          echo "b64=$(base64 -w0 docker/apps.json)" >> "$GITHUB_OUTPUT"
 
       - id: meta
         run: echo "image=${{ steps.ecr.outputs.registry }}/${PROJECT}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
