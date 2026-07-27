@@ -8,6 +8,7 @@ name: CD
 on:
   push:
     branches: [main]
+    tags: ["v*"]
     paths-ignore:
       - "**.md"
       - "**.po"
@@ -19,6 +20,10 @@ on:
     inputs:
       skip_tests:
         description: "Skip the test gate (hotfix only)"
+        type: boolean
+        default: false
+      deploy_prod:
+        description: "Also deploy to production (prod infra must exist)"
         type: boolean
         default: false
 
@@ -181,9 +186,15 @@ jobs:
   deploy-prod:
     name: Deploy production
     needs: [build, deploy-staging]
+    # Prod is opt-in: a v* tag, or workflow_dispatch with deploy_prod. A plain
+    # merge to main reaches staging only.
+    #
+    # Declaring the environment means required reviewers apply as a second
+    # gate the moment someone with admin adds them in repo settings -- but
+    # this condition is what actually holds today, since an environment with
+    # no protection rules gates nothing.
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.deploy_prod }}
     runs-on: ubuntu-latest
-    # Gate: configure required reviewers on the `production` environment in
-    # repo settings. Without that, this promotes automatically.
     environment:
       name: production
       url: ${{ steps.deploy.outputs.url }}
