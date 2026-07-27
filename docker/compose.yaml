@@ -80,8 +80,12 @@ services:
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - logs:/home/frappe/frappe-bench/logs
-    ports:
-      - "80:8080"
+    # No host port binding here on purpose. Whichever overlay is layered on
+    # top publishes it: compose.ports.yaml binds :80 directly, and
+    # compose.traefik.yaml puts Traefik in front instead. Compose merges
+    # `ports` by appending rather than replacing, so declaring it here would
+    # force the TLS overlay to clear it with a custom !override tag -- which
+    # in turn breaks the repo's check-yaml pre-commit hook.
     depends_on:
       - backend
       - websocket

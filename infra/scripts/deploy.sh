@@ -23,9 +23,13 @@ fetch_secret() {
     --with-decryption --query Parameter.Value --output text
 }
 
+# Exactly one overlay publishes port 80: Traefik when TLS is on, the plain
+# host binding otherwise.
 COMPOSE_FILES=(-f compose.yaml)
 if [[ "${ENABLE_TLS:-false}" == "true" ]]; then
   COMPOSE_FILES+=(-f compose.traefik.yaml)
+else
+  COMPOSE_FILES+=(-f compose.ports.yaml)
 fi
 compose() { docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" "$@"; }
 
