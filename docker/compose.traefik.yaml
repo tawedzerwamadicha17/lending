@@ -8,7 +8,8 @@
 
 services:
   frontend:
-    ports: !override []
+    # frontend publishes no host ports in the base file, so there is nothing
+    # to clear here -- Traefik reaches it over the compose network.
     labels:
       traefik.enable: "true"
       traefik.http.routers.lending.rule: Host(`${SITE_NAME}`)

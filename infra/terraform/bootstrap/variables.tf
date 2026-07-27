@@ -16,6 +16,12 @@ variable "github_repository" {
   default     = "tawedzerwamadicha17/lending"
 }
 
+variable "github_immutable_subject_prefix" {
+  description = "GitHub's immutable OIDC subject prefix, e.g. repo:owner@129616106/repo@1308916498. Read it from GET /repos/{owner}/{repo}/actions/oidc/customization/sub. Empty trusts only the legacy form."
+  type        = string
+  default     = ""
+}
+
 variable "environments" {
   description = "Environment names the CI role may publish stack config for. Must match the env stack's `environment` values."
   type        = list(string)

@@ -1,0 +1,12 @@
+# Plain-HTTP overlay: publish the app directly on host :80.
+#
+#   docker compose -f compose.yaml -f compose.ports.yaml up -d
+#
+# Use this when ENABLE_TLS is false -- typically before a domain resolves to
+# the host. Swap it for compose.traefik.yaml to terminate TLS instead; the two
+# are mutually exclusive, since both want port 80.
+
+services:
+  frontend:
+    ports:
+      - "80:8080"

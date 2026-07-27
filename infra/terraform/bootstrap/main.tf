@@ -102,6 +102,32 @@ resource "aws_iam_openid_connect_provider" "github" {
   thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
 }
 
+# GitHub is migrating OIDC subjects to an "immutable" form that embeds the
+# numeric owner and repo IDs -- repo:owner@129616106/repo@1308916498 rather
+# than repo:owner/repo. Which form a repository emits is not something this
+# stack controls, so trust both; the legacy form alone yields AccessDenied on
+# AssumeRoleWithWebIdentity once a repo has flipped.
+#
+# Read the current prefix with:
+#   gh api /repos/<owner>/<repo>/actions/oidc/customization/sub
+locals {
+  github_subject_prefixes = compact([
+    "repo:${var.github_repository}",
+    var.github_immutable_subject_prefix,
+  ])
+
+  # Scoped to main, release tags, and the two deployment environments. A fork
+  # or an arbitrary branch cannot assume this role.
+  github_subjects = flatten([
+    for prefix in local.github_subject_prefixes : [
+      "${prefix}:ref:refs/heads/main",
+      "${prefix}:ref:refs/tags/*",
+      "${prefix}:environment:staging",
+      "${prefix}:environment:production",
+    ]
+  ])
+}
+
 data "aws_iam_policy_document" "ci_assume" {
   statement {
     effect  = "Allow"
@@ -118,17 +144,10 @@ data "aws_iam_policy_document" "ci_assume" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Scoped to this repo, and within it to main, release tags, and the two
-    # deployment environments. A fork or an arbitrary branch cannot assume it.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values = [
-        "repo:${var.github_repository}:ref:refs/heads/main",
-        "repo:${var.github_repository}:ref:refs/tags/*",
-        "repo:${var.github_repository}:environment:staging",
-        "repo:${var.github_repository}:environment:production",
-      ]
+      values   = local.github_subjects
     }
   }
 }

@@ -59,6 +59,7 @@ runs:
         # Ship the compose files and scripts that belong to this commit, so a
         # change to the stack definition deploys with the code that needs it.
         aws s3 cp docker/compose.yaml          "s3://${BUCKET}/config/compose.yaml"
+        aws s3 cp docker/compose.ports.yaml    "s3://${BUCKET}/config/compose.ports.yaml"
         aws s3 cp docker/compose.traefik.yaml  "s3://${BUCKET}/config/compose.traefik.yaml"
         aws s3 cp infra/scripts/deploy.sh      "s3://${BUCKET}/config/deploy.sh"
         aws s3 cp infra/scripts/backup.sh      "s3://${BUCKET}/config/backup.sh"

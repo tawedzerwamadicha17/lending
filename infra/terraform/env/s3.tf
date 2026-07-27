@@ -67,6 +67,7 @@ locals {
 
   config_files = {
     "compose.yaml"         = "${local.repo_root}/docker/compose.yaml"
+    "compose.ports.yaml"   = "${local.repo_root}/docker/compose.ports.yaml"
     "compose.traefik.yaml" = "${local.repo_root}/docker/compose.traefik.yaml"
     "deploy.sh"            = "${local.repo_root}/infra/scripts/deploy.sh"
     "backup.sh"            = "${local.repo_root}/infra/scripts/backup.sh"
