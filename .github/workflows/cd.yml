@@ -35,19 +35,21 @@ permissions:
 env:
   AWS_REGION: af-south-1
   PROJECT: corebyte
-  # Pin this. `main` is used so a fresh setup works, but upstream changes to
-  # the Containerfile will silently change your image otherwise.
-  FRAPPE_DOCKER_REF: main
+  # Pinned to a commit, not a branch. Tracking `main` meant an upstream change
+  # to the Containerfile's interface silently changed our image: it moved
+  # apps.json from a build arg to a BuildKit secret, so the arg was ignored,
+  # bench init installed frappe alone, and the failure only surfaced at
+  # `bench new-site` with ModuleNotFoundError: No module named 'erpnext'.
+  # Bump this deliberately and re-test.
+  FRAPPE_DOCKER_REF: 3562e512582d2e6eef18225d25e3a0532ee9dc00
   FRAPPE_BRANCH: develop
-  # Base image tag: python:<PYTHON_VERSION>-slim-bookworm, so a minor series
-  # is fine here.
+  # Used by the test job only. The image build deliberately does NOT override
+  # the Containerfile's own PYTHON_VERSION/NODE_VERSION defaults (3.14.2 /
+  # 24.13.0) -- upstream tests that pairing, and overriding NODE_VERSION with
+  # a non-exact version previously broke the build, since the Containerfile
+  # puts $NVM_DIR/versions/node/v${NODE_VERSION}/bin on PATH.
   PYTHON_VERSION: "3.14"
-  # Must be a FULL semver. The Containerfile puts
-  # $NVM_DIR/versions/node/v${NODE_VERSION}/bin on PATH, and nvm creates that
-  # directory under the resolved version -- so "24" installs v24.18.0 and then
-  # every node tool is off PATH, surfacing as `FileNotFoundError: 'yarn'`
-  # during bench init.
-  NODE_VERSION: "24.18.0"
+  NODE_VERSION: "24"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -124,17 +126,19 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Fetch frappe_docker build context
-        run: git clone --depth 1 --branch "$FRAPPE_DOCKER_REF" https://github.com/frappe/frappe_docker frappe_docker
-
-      - name: Encode apps.json
-        id: apps
         run: |
-          # This repository is public, so the build clones it anonymously and
-          # no credential is involved. If it is ever made private, rewrite the
-          # URL here as https://x-access-token:${{ '${TOKEN}' }}@github.com/<repo>
-          # -- but note that build args are recorded in image metadata and
-          # echoed in build logs, so use a job-scoped token, never a PAT.
-          echo "b64=$(base64 -w0 docker/apps.json)" >> "$GITHUB_OUTPUT"
+          # A pinned commit is not fetchable by --branch, so clone then check out.
+          git clone --filter=blob:none https://github.com/frappe/frappe_docker frappe_docker
+          git -C frappe_docker checkout --detach "$FRAPPE_DOCKER_REF"
+
+      - name: Verify the Containerfile still consumes apps.json as a secret
+        run: |
+          # Guard against the interface drifting again on a future bump. If
+          # this fails, the image would build "successfully" with frappe only
+          # and the problem would not surface until bench new-site.
+          grep -q 'id=apps_json,target=/opt/frappe/apps.json' \
+            frappe_docker/images/custom/Containerfile \
+            || { echo "::error::Containerfile no longer mounts apps.json as the apps_json secret. Re-check how apps are passed before bumping FRAPPE_DOCKER_REF."; exit 1; }
 
       - id: meta
         run: echo "image=${{ steps.ecr.outputs.registry }}/${PROJECT}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
@@ -153,9 +157,11 @@ jobs:
           build-args: |
             FRAPPE_PATH=https://github.com/frappe/frappe
             FRAPPE_BRANCH=${{ env.FRAPPE_BRANCH }}
-            PYTHON_VERSION=${{ env.PYTHON_VERSION }}
-            NODE_VERSION=${{ env.NODE_VERSION }}
-            APPS_JSON_BASE64=${{ steps.apps.outputs.b64 }}
+          # The Containerfile mounts this at /opt/frappe/apps.json and passes it
+          # to `bench init --apps_path`. It is a secret mount, not a build arg,
+          # so unlike a build arg it is not baked into image metadata.
+          secret-files: |
+            apps_json=${{ github.workspace }}/docker/apps.json
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

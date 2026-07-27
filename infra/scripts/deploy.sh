@@ -120,6 +120,22 @@ else
     --set-default
 fi
 
+# Converge the installed app set. A site can exist with apps missing -- a
+# new-site run that creates the database and then dies partway through
+# installing apps leaves exactly that -- and the migrate path alone would
+# never notice, silently serving a site without erpnext or lending.
+ensure_app() {
+  local app="$1"
+  if compose exec -T backend bench --site "$SITE_NAME" list-apps 2>/dev/null | grep -qw "$app"; then
+    return 0
+  fi
+  log "installing missing app: $app"
+  compose exec -T backend bench --site "$SITE_NAME" install-app "$app"
+}
+
+ensure_app erpnext
+ensure_app lending
+
 log "starting full stack"
 compose up -d
 
