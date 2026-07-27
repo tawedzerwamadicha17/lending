@@ -1,0 +1,213 @@
+name: CD
+
+# Push to main  -> test + build -> deploy staging -> (manual approval) -> deploy prod
+#
+# Prod runs the exact image digest that staging accepted, so the approval gate
+# promotes a tested artifact rather than rebuilding one.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore:
+      - "**.md"
+      - "**.po"
+      - "**.pot"
+      - "crowdin.yml"
+      - ".mergify.yml"
+      - "infra/terraform/**"
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: "Skip the test gate (hotfix only)"
+        type: boolean
+        default: false
+      deploy_prod:
+        description: "Also deploy to production (prod infra must exist)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false # never interrupt a half-finished deploy
+
+permissions:
+  contents: read
+  id-token: write # required for AWS OIDC
+
+env:
+  AWS_REGION: af-south-1
+  PROJECT: corebyte
+  # Pin this. `main` is used so a fresh setup works, but upstream changes to
+  # the Containerfile will silently change your image otherwise.
+  FRAPPE_DOCKER_REF: main
+  FRAPPE_BRANCH: develop
+  PYTHON_VERSION: "3.14"
+  NODE_VERSION: "24"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  test:
+    name: Tests ${{ matrix.container }}
+    if: ${{ !inputs.skip_tests }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: true # a red shard means nothing ships; stop burning minutes
+      matrix:
+        container: [1, 2, 3]
+
+    services:
+      mysql:
+        image: mariadb:11.3
+        env:
+          MARIADB_ROOT_PASSWORD: "root"
+        ports:
+          - 3306:3306
+        options: --health-cmd="mariadb-admin ping" --health-interval=5s --health-timeout=2s --health-retries=3
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          check-latest: true
+
+      - name: Add to Hosts
+        run: echo "127.0.0.1 test_site" | sudo tee -a /etc/hosts
+
+      - name: Install
+        run: bash ${GITHUB_WORKSPACE}/.github/helper/install.sh
+        env:
+          BRANCH_TO_CLONE: ${{ github.ref_name }}
+
+      - name: Run Tests
+        run: |
+          cd ~/frappe-bench/
+          bench --site test_site run-parallel-tests \
+            --app lending \
+            --total-builds ${{ strategy.job-total }} \
+            --build-number ${{ matrix.container }} \
+            --lightmode
+        env:
+          TYPE: server
+
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build image
+    # Native arm64 runner -- free on public repos. On a private repo either
+    # switch this to a paid arm64 larger runner or fall back to
+    # ubuntu-latest + QEMU (docker/setup-qemu-action), which takes ~4x longer.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Fetch frappe_docker build context
+        run: git clone --depth 1 --branch "$FRAPPE_DOCKER_REF" https://github.com/frappe/frappe_docker frappe_docker
+
+      - name: Compose apps.json
+        id: apps
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Rewrite this repo's URL with a job-scoped token so the build can
+          # clone it even when the repo is private. The token expires with the
+          # job, so its presence in build metadata is inert.
+          jq --arg url "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}" \
+             'map(if (.url | test("/${{ github.event.repository.name }}$")) then .url = $url else . end)' \
+             docker/apps.json > apps.resolved.json
+          echo "b64=$(base64 -w0 apps.resolved.json)" >> "$GITHUB_OUTPUT"
+
+      - id: meta
+        run: echo "image=${{ steps.ecr.outputs.registry }}/${PROJECT}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frappe_docker
+          file: ./frappe_docker/images/custom/Containerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}
+            ${{ steps.ecr.outputs.registry }}/${{ env.PROJECT }}:main
+          build-args: |
+            FRAPPE_PATH=https://github.com/frappe/frappe
+            FRAPPE_BRANCH=${{ env.FRAPPE_BRANCH }}
+            PYTHON_VERSION=${{ env.PYTHON_VERSION }}
+            NODE_VERSION=${{ env.NODE_VERSION }}
+            APPS_JSON_BASE64=${{ steps.apps.outputs.b64 }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------------------
+  deploy-staging:
+    name: Deploy staging
+    needs: [test, build]
+    # Still deploy when tests were explicitly skipped for a hotfix.
+    if: ${{ always() && needs.build.result == 'success' && (needs.test.result == 'success' || inputs.skip_tests) }}
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: deploy
+        uses: ./.github/actions/ssm-deploy
+        with:
+          environment: staging
+          image: ${{ needs.build.outputs.image }}
+          project: ${{ env.PROJECT }}
+          region: ${{ env.AWS_REGION }}
+
+  # ---------------------------------------------------------------------------
+  deploy-prod:
+    name: Deploy production
+    needs: [build, deploy-staging]
+    # Prod is opt-in: a v* tag, or workflow_dispatch with deploy_prod. A plain
+    # merge to main reaches staging only.
+    #
+    # Declaring the environment means required reviewers apply as a second
+    # gate the moment someone with admin adds them in repo settings -- but
+    # this condition is what actually holds today, since an environment with
+    # no protection rules gates nothing.
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.deploy_prod }}
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: deploy
+        uses: ./.github/actions/ssm-deploy
+        with:
+          environment: prod
+          image: ${{ needs.build.outputs.image }}
+          project: ${{ env.PROJECT }}
+          region: ${{ env.AWS_REGION }}

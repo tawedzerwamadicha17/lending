@@ -1,0 +1,14 @@
+[
+  {
+    "url": "https://github.com/frappe/payments",
+    "branch": "develop"
+  },
+  {
+    "url": "https://github.com/frappe/erpnext",
+    "branch": "develop"
+  },
+  {
+    "url": "https://github.com/tawedzerwamadicha17/lending",
+    "branch": "main"
+  }
+]

@@ -1,0 +1,41 @@
+# TLS overlay. Applied only when ENABLE_TLS=true and SITE_NAME is a real
+# domain whose A record already points at this host -- Let's Encrypt validates
+# over HTTP, so it fails closed if DNS is not live yet.
+#
+#   docker compose -f compose.yaml -f compose.traefik.yaml up -d
+#
+# Takes port 80 away from `frontend` and puts Traefik in front of it.
+
+services:
+  frontend:
+    ports: !override []
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.lending.rule: Host(`${SITE_NAME}`)
+      traefik.http.routers.lending.entrypoints: websecure
+      traefik.http.routers.lending.tls.certresolver: le
+      traefik.http.services.lending.loadbalancer.server.port: "8080"
+
+  traefik:
+    image: traefik:v3.3
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL:?ACME_EMAIL must be set when TLS is enabled}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+
+volumes:
+  letsencrypt:

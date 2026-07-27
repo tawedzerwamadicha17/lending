@@ -6,3 +6,21 @@ tags
 node_modules
 dist
 lending/public/dist
+
+# terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# local stack config
+docker/.env
+apps.resolved.json
