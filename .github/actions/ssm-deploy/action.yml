@@ -11,7 +11,7 @@ inputs:
   project:
     description: Project tag / name prefix
     required: true
-    default: lending
+    default: corebyte
   region:
     description: AWS region
     required: true

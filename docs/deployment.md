@@ -1,6 +1,15 @@
 # Deployment
 
-Frappe Lending on AWS, optimised for cost. One Graviton EC2 instance per
+Corebyte — the Frappe Lending deployment for `nexinfrasolutions.net` — on AWS,
+optimised for cost.
+
+> **Naming.** `corebyte` is the product and the AWS resource prefix (ECR repo,
+> buckets, IAM roles, instance tags, SSM parameter paths, Docker Compose
+> project). The Frappe app inside the image is still `lending`, because that is
+> upstream `frappe/lending` and renaming it would mean renaming every module,
+> doctype and hook, permanently breaking merges from upstream.
+
+One Graviton EC2 instance per
 environment runs the whole stack — MariaDB, Redis, gunicorn, background
 workers and nginx — under Docker Compose. There is no load balancer, no NAT
 gateway and no managed database, because each of those costs more per month
@@ -108,14 +117,14 @@ cd infra/terraform/env
 
 # staging
 terraform init -reconfigure \
-  -backend-config=bucket=<state_bucket output> \
+  -backend-config=bucket=corebyte-tfstate-685425160478 \
   -backend-config=key=staging/terraform.tfstate \
   -backend-config=region=af-south-1
 terraform apply -var-file=envs/staging.tfvars
 
 # prod — note the -reconfigure and the different key
 terraform init -reconfigure \
-  -backend-config=bucket=<state_bucket output> \
+  -backend-config=bucket=corebyte-tfstate-685425160478 \
   -backend-config=key=prod/terraform.tfstate \
   -backend-config=region=af-south-1
 terraform apply -var-file=envs/prod.tfvars
@@ -137,7 +146,7 @@ subsequent run migrates it.
 Get the Administrator password:
 
 ```bash
-aws ssm get-parameter --name /lending/prod/admin_password \
+aws ssm get-parameter --name /corebyte/prod/admin_password \
   --with-decryption --query Parameter.Value --output text
 ```
 
@@ -162,8 +171,8 @@ closed if DNS is not live yet — check DNS before flipping the flag.
 ```bash
 aws ssm start-session --target <instance_id>
 sudo -i && cd /opt/lending
-docker compose -p lending -f compose.yaml ps
-docker compose -p lending -f compose.yaml logs -f backend
+docker compose -p corebyte -f compose.yaml ps
+docker compose -p corebyte -f compose.yaml logs -f backend
 ```
 
 **Redeploy without a code change:** re-run the CD workflow.
@@ -175,7 +184,7 @@ roll back with it; if the bad deploy migrated, restore from backup instead.
 **Restore:**
 
 ```bash
-aws s3 ls s3://lending-prod-<account>/prod/
+aws s3 ls s3://corebyte-prod-<account>/prod/
 sudo /opt/lending/restore.sh 2026-07-27T02-00-00Z
 ```
 

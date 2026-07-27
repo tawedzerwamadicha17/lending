@@ -1,7 +1,7 @@
 variable "project" {
   description = "Name prefix shared with the bootstrap stack."
   type        = string
-  default     = "lending"
+  default     = "corebyte"
 }
 
 variable "environment" {
@@ -47,6 +47,12 @@ variable "swap_size_mb" {
 variable "site_name" {
   description = "The Frappe site name."
   type        = string
+}
+
+variable "route53_zone_id" {
+  description = "Route53 hosted zone for site_name. Empty means DNS is managed outside Terraform."
+  type        = string
+  default     = ""
 }
 
 variable "enable_tls" {

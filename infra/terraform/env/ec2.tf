@@ -23,6 +23,8 @@ resource "aws_instance" "app" {
     http_endpoint = "enabled"
   }
 
+  # Terraform interpolates ${...} in this template; the script's own shell
+  # variables are written as $VAR or escaped $${VAR}.
   user_data = templatefile("${path.module}/templates/user-data.sh.tftpl", {
     project        = var.project
     environment    = var.environment

@@ -7,9 +7,10 @@ instance_type    = "t4g.small"
 root_volume_size = 20
 swap_size_mb     = 2048
 
-site_name  = "staging.lending.example.com"
-enable_tls = false
-acme_email = ""
+site_name       = "staging.corebyte.nexinfrasolutions.net"
+route53_zone_id = "Z05246372B8WP53PMAZ01"
+enable_tls      = true
+acme_email      = "amaditsha@gmail.com"
 
 # Distinct range from prod so the two VPCs stay peer-able if that is ever
 # wanted.

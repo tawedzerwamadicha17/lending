@@ -1,7 +1,7 @@
 variable "project" {
   description = "Name prefix for every resource. Also the ECR repository name."
   type        = string
-  default     = "lending"
+  default     = "corebyte"
 }
 
 variable "aws_region" {

@@ -14,16 +14,16 @@ APP_DIR=/opt/lending
 cd "$APP_DIR"
 
 # shellcheck source=/dev/null
-source "$APP_DIR/stack.env"   # ENVIRONMENT, REGION, BACKUP_BUCKET, SITE_NAME, SSM_PREFIX
+source "$APP_DIR/stack.env"   # ENVIRONMENT, REGION, BACKUP_BUCKET, SITE_NAME, SSM_PREFIX, COMPOSE_PROJECT
 
 read -rp "This overwrites site $SITE_NAME in $ENVIRONMENT. Type the environment name to confirm: " CONFIRM
 [[ "$CONFIRM" == "$ENVIRONMENT" ]] || { echo "aborted"; exit 1; }
 
-compose() { docker compose -p lending -f compose.yaml "$@"; }
+compose() { docker compose -p "$COMPOSE_PROJECT" -f compose.yaml "$@"; }
 
 # Stage the download inside the sites volume so the container can see it.
 REL_DIR="private/backups/restore-$STAMP"
-HOST_DIR="/var/lib/docker/volumes/lending_sites/_data/$SITE_NAME/$REL_DIR"
+HOST_DIR="/var/lib/docker/volumes/${COMPOSE_PROJECT}_sites/_data/$SITE_NAME/$REL_DIR"
 mkdir -p "$HOST_DIR"
 aws s3 cp --region "$REGION" --recursive "s3://$BACKUP_BUCKET/$ENVIRONMENT/$STAMP/" "$HOST_DIR/"
 

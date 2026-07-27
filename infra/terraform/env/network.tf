@@ -70,7 +70,8 @@ resource "aws_security_group" "app" {
   }
 
   egress {
-    description = "All outbound (ECR, SSM, S3, Let's Encrypt, app registries)"
+    # AWS rejects apostrophes in rule descriptions.
+    description = "All outbound (ECR, SSM, S3, ACME, app registries)"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"

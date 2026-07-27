@@ -14,7 +14,7 @@ APP_DIR=/opt/lending
 cd "$APP_DIR"
 
 # shellcheck source=/dev/null
-source "$APP_DIR/stack.env"   # written by cloud-init: ENVIRONMENT, REGION, SSM_PREFIX, SITE_NAME, ENABLE_TLS, ACME_EMAIL
+source "$APP_DIR/stack.env"   # written by cloud-init: ENVIRONMENT, REGION, SSM_PREFIX, SITE_NAME, ENABLE_TLS, ACME_EMAIL, COMPOSE_PROJECT
 
 log() { echo "[deploy $(date -u +%H:%M:%S)] $*"; }
 
@@ -27,7 +27,7 @@ COMPOSE_FILES=(-f compose.yaml)
 if [[ "${ENABLE_TLS:-false}" == "true" ]]; then
   COMPOSE_FILES+=(-f compose.traefik.yaml)
 fi
-compose() { docker compose -p lending "${COMPOSE_FILES[@]}" "$@"; }
+compose() { docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" "$@"; }
 
 log "resolving secrets from SSM Parameter Store"
 DB_ROOT_PASSWORD="$(fetch_secret db_root_password)"
