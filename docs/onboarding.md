@@ -139,6 +139,12 @@ aws ssm get-parameter --region af-south-1 \
 
 Don't paste it into Slack — anyone who needs it can run this.
 
+You cannot read this password out of Frappe: it is stored as a one-way hash,
+and `site_config.json` holds database credentials only. SSM is the single
+source of truth. See
+[Recovering credentials](deployment.md#recovering-credentials) if you ever
+think it has been lost.
+
 ## 8. Things that will bite you
 
 - **The `scheduler` container drives all the money.** Interest accrual, loan
