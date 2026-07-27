@@ -64,6 +64,7 @@ runs:
         aws s3 cp infra/scripts/deploy.sh      "s3://${BUCKET}/config/deploy.sh"
         aws s3 cp infra/scripts/backup.sh      "s3://${BUCKET}/config/backup.sh"
         aws s3 cp infra/scripts/restore.sh     "s3://${BUCKET}/config/restore.sh"
+        aws s3 cp infra/scripts/stack.sh       "s3://${BUCKET}/config/stack.sh"
 
         # Built as a JSON file rather than the CLI's shorthand syntax --
         # shorthand cannot carry these values safely once they contain

@@ -72,6 +72,7 @@ locals {
     "deploy.sh"            = "${local.repo_root}/infra/scripts/deploy.sh"
     "backup.sh"            = "${local.repo_root}/infra/scripts/backup.sh"
     "restore.sh"           = "${local.repo_root}/infra/scripts/restore.sh"
+    "stack.sh"             = "${local.repo_root}/infra/scripts/stack.sh"
   }
 }
 
