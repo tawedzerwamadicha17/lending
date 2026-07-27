@@ -164,6 +164,44 @@ acme_email = "ops@yourdomain.com"
 a Let's Encrypt certificate. Let's Encrypt validates over HTTP, so this fails
 closed if DNS is not live yet — check DNS before flipping the flag.
 
+## Giving someone shell access
+
+There is no EC2 key pair in this project and no inbound port 22 — check
+`network.tf`, the security group has no rule for it. Do not create one.
+
+Access is per person, through SSM Session Manager:
+
+```bash
+aws iam add-user-to-group --group-name corebyte-operators --user-name <them>
+```
+
+They install the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
+and connect:
+
+```bash
+aws ssm start-session --region af-south-1 --target <instance-id>
+```
+
+The `corebyte-operators` group (`bootstrap/operators.tf`) permits
+`ssm:StartSession` only on instances tagged `Project=corebyte`, which matters
+because other workloads share this account. It also allows
+`AWS-StartSSHSession`, so anyone whose tooling genuinely needs `ssh` or `scp`
+can tunnel over SSM with an `ssh -o ProxyCommand=...` config — still with no
+open port.
+
+Why not just share a `.pem`:
+
+| | Shared key pair | SSM Session Manager |
+| --- | --- | --- |
+| Identity | One secret, everyone is `ec2-user` | Each person's own IAM principal |
+| Revoking one person | Rotate key, redeploy, notify everyone | Remove them from the group |
+| Audit | Nothing attributable | Every session in CloudTrail |
+| Exposure | Port 22 open to the internet | No inbound port |
+
+The group deliberately does **not** grant access to the SSM parameters holding
+the database root and Administrator passwords. Grant those separately, per
+person, if someone genuinely needs them.
+
 ## Everyday operations
 
 **Shell on a box** (no SSH, no key, no open port 22):
