@@ -9,11 +9,16 @@ optimised for cost.
 > upstream `frappe/lending` and renaming it would mean renaming every module,
 > doctype and hook, permanently breaking merges from upstream.
 
-One Graviton EC2 instance per
-environment runs the whole stack — MariaDB, Redis, gunicorn, background
-workers and nginx — under Docker Compose. There is no load balancer, no NAT
-gateway and no managed database, because each of those costs more per month
-than everything here combined.
+> **Staging only.** There is currently no production environment, by
+> decision. The stack is parameterised by environment, so adding one later
+> means restoring `envs/prod.tfvars` and the `deploy-prod` job from git
+> history, widening the `environment` validation in `variables.tf`, and
+> re-adding the prod subject to the CI role's OIDC trust policy.
+
+A single Graviton EC2 instance runs the whole stack — MariaDB, Redis,
+gunicorn, background workers and nginx — under Docker Compose. There is no
+load balancer, no NAT gateway and no managed database, because each of those
+costs more per month than everything here combined.
 
 ## Topology
 
@@ -22,59 +27,53 @@ than everything here combined.
                        │  OIDC (no stored AWS keys)
                        ▼
               ┌────────────────┐
-              │      ECR       │  one image, promoted by digest
+              │      ECR       │  tagged by commit SHA
               └───────┬────────┘
                       │ ssm:SendCommand
-        ┌─────────────┴─────────────┐
-        ▼                           ▼
-  staging (t4g.small)         prod (t4g.small)
-  ┌──────────────────┐        ┌──────────────────┐
-  │ traefik / nginx  │        │ traefik / nginx  │
-  │ gunicorn         │        │ gunicorn         │
-  │ scheduler        │        │ scheduler        │
-  │ queue-short/long │        │ queue-short/long │
-  │ mariadb · redis  │        │ mariadb · redis  │
-  └────────┬─────────┘        └────────┬─────────┘
-           └──── nightly bench backup ─┴──► S3 (lifecycle-expired)
+                      ▼
+              staging (t4g.small)
+              ┌──────────────────┐
+              │ traefik / nginx  │
+              │ gunicorn         │
+              │ scheduler        │
+              │ queue-short/long │
+              │ mariadb · redis  │
+              └────────┬─────────┘
+                       └── nightly bench backup ──► S3 (lifecycle-expired)
 ```
 
-Each environment is a fully separate VPC, instance, database and bucket.
+The environment is a self-contained VPC, instance, database and bucket.
 
 ## Running cost
 
 `af-south-1` on-demand, per month, at 730 hours. Unit prices pulled from the
 AWS Pricing API rather than estimated.
 
-| Item | Unit | Prod | Staging |
-| --- | --- | ---: | ---: |
-| EC2 t4g.small | $0.0217/hr | $15.84 | $15.84 |
-| EBS gp3 (30 / 20 GiB) | $0.1047/GB-mo | $3.14 | $2.09 |
-| Public IPv4 address | $0.005/hr | $3.65 | $3.65 |
-| **Subtotal** | | **$22.63** | **$21.58** |
-
-Shared: ECR ~$1.20 (10 images, lifecycle-capped), S3 backups ~$0.20.
-**Total ≈ $46/month.**
+| Item | Unit | Staging |
+| --- | --- | ---: |
+| EC2 t4g.small | $0.0217/hr | $15.84 |
+| EBS gp3 (20 GiB) | $0.1047/GB-mo | $2.09 |
+| Public IPv4 address | $0.005/hr | $3.65 |
+| ECR (10 images, lifecycle-capped) | | ~$1.20 |
+| S3 backups | | ~$0.20 |
+| **Total** | | **≈ $23/month** |
 
 `af-south-1` (Cape Town) is a comparatively expensive region — t4g.small
-costs 29% more than in `us-east-1` and gp3 31% more, putting the same estate
-at ~$37/month there. That premium buys latency to Southern African users,
-which for an interactive loan-officer UI is usually the right trade. Moving
-regions means changing `aws_region` in both Terraform stacks and `AWS_REGION`
-in `cd.yml`.
+costs 29% more than in `us-east-1` and gp3 31% more. That premium buys
+latency to Southern African users, which for an interactive loan-officer UI
+is usually the right trade. Moving regions means changing `aws_region` in
+both Terraform stacks and `AWS_REGION` in `cd.yml`.
 
-Both environments run the same instance type deliberately: a staging box that
-cannot reproduce prod's memory pressure will not catch the failures that
-matter here.
+`t4g.small` (2 GiB) is the floor for the full stack — MariaDB plus gunicorn
+plus three workers does not fit in 1 GiB without constant swapping.
 
 Levers if that needs to come down further:
 
-- **Stop staging out of hours.** An EventBridge schedule stopping it nightly
-  and at weekends cuts its compute by roughly half (~$8/month saved). EBS and
-  IPv4 charges continue while stopped. This is the best lever — it costs
-  nothing in fidelity, since staging is idle at those times anyway.
-- **Compute Savings Plan.** A 1-year no-upfront plan takes ~30% off both
-  instances (~$9/month) at the cost of a commitment.
-- **Drop staging entirely.** Prod-only is ~$24/month.
+- **Stop the instance out of hours.** An EventBridge schedule stopping it
+  nightly and at weekends cuts compute by roughly half (~$8/month saved). EBS
+  and IPv4 charges continue while stopped.
+- **Compute Savings Plan.** A 1-year no-upfront plan takes ~30% off the
+  instance (~$5/month) at the cost of a commitment.
 
 The single largest avoidable cost in a naive setup is a NAT gateway at
 ~$32/month — more than this entire estate. `network.tf` places the instance
@@ -106,9 +105,9 @@ Repository → Settings → Secrets and variables → Actions → **Variables**:
 | --- | --- |
 | `AWS_DEPLOY_ROLE_ARN` | `ci_role_arn` output |
 
-Then Settings → Environments, create **`staging`** and **`production`**. Add
-required reviewers to `production` — that approval is the only thing standing
-between a merge to `main` and a production release.
+Creating the `staging` environment in Settings → Environments is optional —
+GitHub creates it implicitly on first use. Note that creating environments
+requires **admin** on the repository; write is not enough.
 
 ### 3. Stand up each environment
 
@@ -122,12 +121,6 @@ terraform init -reconfigure \
   -backend-config=region=af-south-1
 terraform apply -var-file=envs/staging.tfvars
 
-# prod — note the -reconfigure and the different key
-terraform init -reconfigure \
-  -backend-config=bucket=corebyte-tfstate-685425160478 \
-  -backend-config=key=prod/terraform.tfstate \
-  -backend-config=region=af-south-1
-terraform apply -var-file=envs/prod.tfvars
 ```
 
 Edit `site_name` in the tfvars first. It becomes the site directory under
@@ -146,7 +139,7 @@ subsequent run migrates it.
 Get the Administrator password:
 
 ```bash
-aws ssm get-parameter --name /corebyte/prod/admin_password \
+aws ssm get-parameter --name /corebyte/staging/admin_password \
   --with-decryption --query Parameter.Value --output text
 ```
 
@@ -155,7 +148,7 @@ aws ssm get-parameter --name /corebyte/prod/admin_password \
 Once DNS for `site_name` points at the `public_ip` output:
 
 ```hcl
-# envs/prod.tfvars
+# envs/staging.tfvars
 enable_tls = true
 acme_email = "ops@yourdomain.com"
 ```
@@ -222,11 +215,11 @@ roll back with it; if the bad deploy migrated, restore from backup instead.
 **Restore:**
 
 ```bash
-aws s3 ls s3://corebyte-prod-<account>/prod/
+aws s3 ls s3://corebyte-staging-685425160478/staging/
 sudo /opt/lending/restore.sh 2026-07-27T02-00-00Z
 ```
 
-Test this on staging before you need it on prod.
+Exercise this before you need it in anger.
 
 ## How the pipeline works
 
@@ -239,8 +232,7 @@ Test this on staging before you need it on prod.
 3. **deploy-staging** — needs both. Publishes the compose files and scripts
    from this commit to S3, then `ssm:SendCommand` runs `deploy.sh` on the box.
    The job polls the command to completion, so a red job means a real failure.
-4. **deploy-prod** — same action, gated by the `production` environment's
-   required reviewers, deploying the identical digest staging accepted.
+
 
 ### Why the image is built this way
 
@@ -274,10 +266,6 @@ a separate role with an explicit permissions boundary.
 2 GiB is genuinely tight for Frappe. `compose.yaml` caps MariaDB's buffer pool
 at 256 MB and runs two gunicorn workers; cloud-init adds a swap file so memory
 pressure degrades to slowness rather than an OOM kill.
-
-Because staging runs the same instance type, memory problems surface there
-first — which is the point. Treat swap usage on staging as a signal about
-prod, not as a staging-only quirk.
 
 Symptoms that you have outgrown a single box: sustained swap usage, the
 scheduler falling behind on `Process Loan Interest Accrual` overnight, or

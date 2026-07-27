@@ -1,14 +1,15 @@
 name: CD
 
-# Push to main  -> test + build -> deploy staging -> (manual approval) -> deploy prod
+# Push to main -> test + build -> deploy staging.
 #
-# Prod runs the exact image digest that staging accepted, so the approval gate
-# promotes a tested artifact rather than rebuilding one.
+# Staging is the only environment. There is deliberately no production job:
+# adding one later means restoring the deploy-prod job (see git history),
+# applying the env stack with a prod tfvars, and re-adding the prod subject to
+# the CI role's OIDC trust policy.
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
     paths-ignore:
       - "**.md"
       - "**.po"
@@ -20,10 +21,6 @@ on:
     inputs:
       skip_tests:
         description: "Skip the test gate (hotfix only)"
-        type: boolean
-        default: false
-      deploy_prod:
-        description: "Also deploy to production (prod infra must exist)"
         type: boolean
         default: false
 
@@ -182,36 +179,6 @@ jobs:
         uses: ./.github/actions/ssm-deploy
         with:
           environment: staging
-          image: ${{ needs.build.outputs.image }}
-          project: ${{ env.PROJECT }}
-          region: ${{ env.AWS_REGION }}
-
-  # ---------------------------------------------------------------------------
-  deploy-prod:
-    name: Deploy production
-    needs: [build, deploy-staging]
-    # Prod is opt-in: a v* tag, or workflow_dispatch with deploy_prod. A plain
-    # merge to main reaches staging only.
-    #
-    # Declaring the environment means required reviewers apply as a second
-    # gate the moment someone with admin adds them in repo settings -- but
-    # this condition is what actually holds today, since an environment with
-    # no protection rules gates nothing.
-    if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.deploy_prod }}
-    runs-on: ubuntu-latest
-    environment:
-      name: production
-      url: ${{ steps.deploy.outputs.url }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-      - id: deploy
-        uses: ./.github/actions/ssm-deploy
-        with:
-          environment: prod
           image: ${{ needs.build.outputs.image }}
           project: ${{ env.PROJECT }}
           region: ${{ env.AWS_REGION }}

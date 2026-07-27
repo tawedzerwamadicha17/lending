@@ -116,14 +116,12 @@ locals {
     var.github_immutable_subject_prefix,
   ])
 
-  # Scoped to main, release tags, and the two deployment environments. A fork
-  # or an arbitrary branch cannot assume this role.
+  # Scoped to main and the staging environment only. A fork, an arbitrary
+  # branch, or a job targeting some other environment cannot assume this role.
   github_subjects = flatten([
     for prefix in local.github_subject_prefixes : [
       "${prefix}:ref:refs/heads/main",
-      "${prefix}:ref:refs/tags/*",
       "${prefix}:environment:staging",
-      "${prefix}:environment:production",
     ]
   ])
 }

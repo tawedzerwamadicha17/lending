@@ -9,8 +9,8 @@ variable "environment" {
   type        = string
 
   validation {
-    condition     = contains(["prod", "staging"], var.environment)
-    error_message = "environment must be prod or staging."
+    condition     = contains(["staging"], var.environment)
+    error_message = "staging is the only environment. Adding prod means restoring envs/prod.tfvars, widening this list, and re-adding the prod subject to the CI role trust policy."
   }
 }
 

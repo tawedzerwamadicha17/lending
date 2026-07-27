@@ -96,8 +96,9 @@ Full runbook in `docs/deployment.md`. Shape of it:
 
 - `docker/apps.json` lists what goes in the image (payments, erpnext, lending). CI builds it with upstream `frappe_docker`'s `images/custom/Containerfile` rather than a Dockerfile in this repo — the v17-dev pin means no published base image exists to layer onto.
 - `docker/compose.yaml` is the whole runtime: MariaDB, two Redises, gunicorn, `scheduler`, `queue-short`, `queue-long`, nginx frontend. `compose.traefik.yaml` layers on TLS. Tuned for a 2 GiB host, so worker counts and `innodb-buffer-pool-size` are deliberately low.
-- `infra/terraform/bootstrap/` is account-level and applied once (state bucket, ECR, GitHub OIDC role). `infra/terraform/env/` is applied per environment with `envs/{prod,staging}.tfvars` and separate state keys.
-- `.github/workflows/cd.yml` runs tests and image build in parallel, deploys staging, then promotes the same digest to prod behind the `production` environment's approval gate. Deploys reach the box via `ssm:SendCommand` — there is no SSH and no inbound port 22.
+- `infra/terraform/bootstrap/` is account-level and applied once (state bucket, ECR, GitHub OIDC role, operators group). `infra/terraform/env/` is applied per environment with `envs/staging.tfvars` and its own state key.
+- `.github/workflows/cd.yml` runs tests and image build in parallel, then deploys staging. Deploys reach the box via `ssm:SendCommand` — there is no SSH, no key pair and no inbound port 22; humans get a shell through the `corebyte-operators` IAM group.
+- **Staging is the only environment.** Adding production means restoring `envs/prod.tfvars` and the `deploy-prod` job from git history, widening the `environment` validation, and re-adding the prod subject to the CI role's OIDC trust policy.
 
 Two things worth knowing before changing any of it: the scheduler container is what drives all of `scheduler_events` in `hooks.py`, so if it is down no interest accrues and no demands are raised; and `deploy.sh` stops workers before `bench migrate`, so deploys are not zero-downtime.
 

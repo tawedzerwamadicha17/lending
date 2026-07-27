@@ -25,7 +25,7 @@ variable "github_immutable_subject_prefix" {
 variable "environments" {
   description = "Environment names the CI role may publish stack config for. Must match the env stack's `environment` values."
   type        = list(string)
-  default     = ["prod", "staging"]
+  default     = ["staging"]
 }
 
 variable "ecr_keep_images" {
