@@ -17,7 +17,7 @@ variable "environment" {
 variable "aws_region" {
   description = "Must match the bootstrap stack's region."
   type        = string
-  default     = "us-east-1"
+  default     = "af-south-1"
 }
 
 # t4g.small (2 GiB) is the practical floor for the full stack -- MariaDB plus

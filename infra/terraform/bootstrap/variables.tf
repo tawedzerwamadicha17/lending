@@ -7,7 +7,7 @@ variable "project" {
 variable "aws_region" {
   description = "Region for all resources. Keep instances and ECR in the same region -- cross-region image pulls are billed."
   type        = string
-  default     = "us-east-1"
+  default     = "af-south-1"
 }
 
 variable "github_repository" {

@@ -31,7 +31,7 @@ permissions:
   id-token: write # required for AWS OIDC
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: af-south-1
   PROJECT: lending
   # Pin this. `main` is used so a fresh setup works, but upstream changes to
   # the Containerfile will silently change your image otherwise.

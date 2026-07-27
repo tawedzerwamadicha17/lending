@@ -33,18 +33,25 @@ Each environment is a fully separate VPC, instance, database and bucket.
 
 ## Running cost
 
-Approximate `us-east-1` on-demand, per month. Verify against the current
-pricing pages before quoting these to anyone.
+`af-south-1` on-demand, per month, at 730 hours. Unit prices pulled from the
+AWS Pricing API rather than estimated.
 
-| Item | Prod | Staging |
-| --- | ---: | ---: |
-| EC2 t4g.small | $12.26 | $12.26 |
-| EBS gp3 (30 / 20 GiB) | $2.40 | $1.60 |
-| Public IPv4 address | $3.65 | $3.65 |
-| **Subtotal** | **$18.31** | **$17.51** |
+| Item | Unit | Prod | Staging |
+| --- | --- | ---: | ---: |
+| EC2 t4g.small | $0.0217/hr | $15.84 | $15.84 |
+| EBS gp3 (30 / 20 GiB) | $0.1047/GB-mo | $3.14 | $2.09 |
+| Public IPv4 address | $0.005/hr | $3.65 | $3.65 |
+| **Subtotal** | | **$22.63** | **$21.58** |
 
-Shared: ECR ~$1.00 (10 images, lifecycle-capped), S3 backups ~$0.15.
-**Total ≈ $37/month.**
+Shared: ECR ~$1.20 (10 images, lifecycle-capped), S3 backups ~$0.20.
+**Total ≈ $46/month.**
+
+`af-south-1` (Cape Town) is a comparatively expensive region — t4g.small
+costs 29% more than in `us-east-1` and gp3 31% more, putting the same estate
+at ~$37/month there. That premium buys latency to Southern African users,
+which for an interactive loan-officer UI is usually the right trade. Moving
+regions means changing `aws_region` in both Terraform stacks and `AWS_REGION`
+in `cd.yml`.
 
 Both environments run the same instance type deliberately: a staging box that
 cannot reproduce prod's memory pressure will not catch the failures that
@@ -53,12 +60,12 @@ matter here.
 Levers if that needs to come down further:
 
 - **Stop staging out of hours.** An EventBridge schedule stopping it nightly
-  and at weekends cuts its compute by roughly half (~$6/month saved). EBS and
+  and at weekends cuts its compute by roughly half (~$8/month saved). EBS and
   IPv4 charges continue while stopped. This is the best lever — it costs
   nothing in fidelity, since staging is idle at those times anyway.
 - **Compute Savings Plan.** A 1-year no-upfront plan takes ~30% off both
-  instances (~$7/month) at the cost of a commitment.
-- **Drop staging entirely.** Prod-only is ~$19/month.
+  instances (~$9/month) at the cost of a commitment.
+- **Drop staging entirely.** Prod-only is ~$24/month.
 
 The single largest avoidable cost in a naive setup is a NAT gateway at
 ~$32/month — more than this entire estate. `network.tf` places the instance
@@ -103,14 +110,14 @@ cd infra/terraform/env
 terraform init -reconfigure \
   -backend-config=bucket=<state_bucket output> \
   -backend-config=key=staging/terraform.tfstate \
-  -backend-config=region=us-east-1
+  -backend-config=region=af-south-1
 terraform apply -var-file=envs/staging.tfvars
 
 # prod — note the -reconfigure and the different key
 terraform init -reconfigure \
   -backend-config=bucket=<state_bucket output> \
   -backend-config=key=prod/terraform.tfstate \
-  -backend-config=region=us-east-1
+  -backend-config=region=af-south-1
 terraform apply -var-file=envs/prod.tfvars
 ```
 
@@ -228,8 +235,8 @@ prod, not as a staging-only quirk.
 Symptoms that you have outgrown a single box: sustained swap usage, the
 scheduler falling behind on `Process Loan Interest Accrual` overnight, or
 `bench --site X migrate` timing out during deploys. The next step is moving
-MariaDB to RDS (`db.t4g.micro`, ~+$13/month), which also gets you managed
-point-in-time recovery.
+MariaDB to RDS (`db.t4g.micro` in af-south-1 is $0.021/hr, ~+$15/month plus
+storage), which also gets you managed point-in-time recovery.
 
 ## Known gaps
 
